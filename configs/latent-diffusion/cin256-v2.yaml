@@ -12,6 +12,7 @@ model:
     image_size: 64
     channels: 3
     cond_stage_trainable: true
+    p_uncond: 0.2
     conditioning_key: crossattn
     monitor: val/loss
     use_ema: False

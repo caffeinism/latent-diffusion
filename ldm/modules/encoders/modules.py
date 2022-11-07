@@ -23,12 +23,16 @@ class ClassEmbedder(nn.Module):
         super().__init__()
         self.key = key
         self.embedding = nn.Embedding(n_classes, embed_dim)
+        self.uncond_key = n_classes - 1
 
-    def forward(self, batch, key=None):
+    def forward(self, batch, key=None, p_uncond=0):
         if key is None:
             key = self.key
         # this is for use in crossattn
         c = batch[key][:, None]
+
+        c[torch.rand(c.size(0)) < p_uncond] = self.uncond_key
+        
         c = self.embedding(c)
         return c
 
