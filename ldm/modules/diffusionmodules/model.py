@@ -369,7 +369,7 @@ class Encoder(nn.Module):
     def __init__(self, *, ch, out_ch, ch_mult=(1,2,4,8), num_res_blocks,
                  attn_resolutions, dropout=0.0, resamp_with_conv=True, in_channels,
                  resolution, z_channels, double_z=True, use_linear_attn=False, attn_type="vanilla",
-                 **ignore_kwargs):
+                 stage=0, **ignore_kwargs):
         super().__init__()
         if use_linear_attn: attn_type = "linear"
         self.ch = ch
@@ -431,6 +431,24 @@ class Encoder(nn.Module):
                                         stride=1,
                                         padding=1)
 
+        self.stage = 0
+        self.init_stage(stage)
+
+    def init_stage(self):
+        # 0 <= stage < len(ch_mult)
+        # stage 0: train encoder 0 decoder 0
+        # stage 1: train encoder 1 decoder 1 / freeze encoder 0 decoder 0
+        # stage 2: train encoder 2 decoder 2 / freeze encoder 01 decoder 01
+        # ...
+
+        if self.stage > 0:
+            requires_grad(self.conv_in, flag=False)
+            print("self.conv_in.requires_grad(False)")
+
+        for i in range(self.stage):
+            requires_grad(self.up[i], flag=False)
+            print(f"self.up[{i}].requires_grad(False)")
+
     def forward(self, x):
         # timestep embedding
         temb = None
@@ -438,7 +456,7 @@ class Encoder(nn.Module):
         # downsampling
         hs = [self.conv_in(x)]
         for i_level in range(self.num_resolutions):
-            for i_block in range(self.num_res_blocks):
+            for i_block in list(range(self.num_res_blocks))[:self.stage + 1]:
                 h = self.down[i_level].block[i_block](hs[-1], temb)
                 if len(self.down[i_level].attn) > 0:
                     h = self.down[i_level].attn[i_block](h)
@@ -447,23 +465,28 @@ class Encoder(nn.Module):
                 hs.append(self.down[i_level].downsample(hs[-1]))
 
         # middle
+        
         h = hs[-1]
-        h = self.mid.block_1(h, temb)
-        h = self.mid.attn_1(h)
-        h = self.mid.block_2(h, temb)
+        if self.stage == self.num_resolutions:
+            h = self.mid.block_1(h, temb)
+            h = self.mid.attn_1(h)
+            h = self.mid.block_2(h, temb)
 
-        # end
-        h = self.norm_out(h)
-        h = nonlinearity(h)
-        h = self.conv_out(h)
+            # end
+            h = self.norm_out(h)
+            h = nonlinearity(h)
+            h = self.conv_out(h)
         return h
 
+def requires_grad(module, flag):
+    for param in module.parameters():
+        param.requires_grad = flag
 
 class Decoder(nn.Module):
     def __init__(self, *, ch, out_ch, ch_mult=(1,2,4,8), num_res_blocks,
                  attn_resolutions, dropout=0.0, resamp_with_conv=True, in_channels,
                  resolution, z_channels, give_pre_end=False, tanh_out=False, use_linear_attn=False,
-                 attn_type="vanilla", **ignorekwargs):
+                 attn_type="vanilla", stage=0, **ignorekwargs):
         super().__init__()
         if use_linear_attn: attn_type = "linear"
         self.ch = ch
@@ -532,6 +555,26 @@ class Decoder(nn.Module):
                                         stride=1,
                                         padding=1)
 
+        self.stage = 0
+        self.init_stage()
+
+    def init_stage(self):
+        # 0 <= stage < len(ch_mult)
+        # stage 0: train encoder 0 decoder 0
+        # stage 1: train encoder 1 decoder 1 / freeze encoder 0 decoder 0
+        # stage 2: train encoder 2 decoder 2 / freeze encoder 01 decoder 01
+        # ...
+
+        if self.stage > 0:
+            requires_grad(self.norm_out, flag=False)
+            requires_grad(self.conv_out, flag=False)
+            print("self.norm_out.requires_grad(False)")
+            print("self.conv_out.requires_grad(False)")
+
+        for i in range(self.stage):
+            requires_grad(self.up[i], flag=False)
+            print(f"self.up[{i}].requires_grad(False)")
+        
     def forward(self, z):
         #assert z.shape[1:] == self.z_shape[1:]
         self.last_z_shape = z.shape
@@ -539,16 +582,17 @@ class Decoder(nn.Module):
         # timestep embedding
         temb = None
 
-        # z to block_in
-        h = self.conv_in(z)
+        if self.stage == self.num_resolutions:
+            # z to block_in
+            h = self.conv_in(z)
 
-        # middle
-        h = self.mid.block_1(h, temb)
-        h = self.mid.attn_1(h)
-        h = self.mid.block_2(h, temb)
+            # middle
+            h = self.mid.block_1(h, temb)
+            h = self.mid.attn_1(h)
+            h = self.mid.block_2(h, temb)
 
         # upsampling
-        for i_level in reversed(range(self.num_resolutions)):
+        for i_level in reversed(list(range(self.num_resolutions))[:self.stage + 1]):
             for i_block in range(self.num_res_blocks+1):
                 h = self.up[i_level].block[i_block](h, temb)
                 if len(self.up[i_level].attn) > 0:
