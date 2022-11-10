@@ -1,5 +1,5 @@
 model:
-  base_learning_rate: 4.5e-6
+  base_learning_rate: 3.75e-7
   target: ldm.models.autoencoder.AutoencoderKL
   params:
     monitor: "val/rec_loss"
@@ -7,7 +7,7 @@ model:
     lossconfig:
       target: ldm.modules.losses.LPIPSWithDiscriminator
       params:
-        disc_start: 50001
+        disc_start: 0
         kl_weight: 0.000001
         disc_weight: 0.5
 
@@ -28,6 +28,7 @@ data:
   target: main.DataModuleFromConfig
   params:
     batch_size: 12
+    num_workers: 12
     wrap: True
     train:
       target: ldm.data.imagenet.ImageNetSRTrain

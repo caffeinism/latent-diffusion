@@ -52,6 +52,13 @@ def get_parser(**parser_kwargs):
         help="resume from logdir or checkpoint in logdir",
     )
     parser.add_argument(
+        "--resume-without-optimizer",
+        type=str2bool,
+        nargs="?",
+        const=True,
+        default=False,
+    )
+    parser.add_argument(
         "-b",
         "--base",
         nargs="*",
@@ -98,6 +105,12 @@ def get_parser(**parser_kwargs):
         default=23,
         help="seed for seed_everything",
     )
+    parser.add_argument(
+        "--max-epochs",
+        type=int,
+        default=1000,
+        help="maximum epochs",
+    ) 
     parser.add_argument(
         "-f",
         "--postfix",
@@ -488,11 +501,20 @@ if __name__ == "__main__":
             logdir = opt.resume.rstrip("/")
             ckpt = os.path.join(logdir, "checkpoints", "last.ckpt")
 
+        if opt.resume_without_optimizer:
+            new_ckpt = ckpt + '_nopt'
+            ckpt_dict = torch.load(ckpt)
+            ckpt_dict['optimizer_states'] = []
+            torch.save(ckpt_dict, new_ckpt)
+            ckpt = new_ckpt
+            
         opt.resume_from_checkpoint = ckpt
         base_configs = sorted(glob.glob(os.path.join(logdir, "configs/*.yaml")))
         opt.base = base_configs + opt.base
         _tmp = logdir.split("/")
         nowname = _tmp[-1]
+        
+
     else:
         if opt.name:
             name = "_" + opt.name
@@ -504,7 +526,7 @@ if __name__ == "__main__":
             name = ""
         nowname = now + name + opt.postfix
         logdir = os.path.join(opt.logdir, nowname)
-
+        
     ckptdir = os.path.join(logdir, "checkpoints")
     cfgdir = os.path.join(logdir, "configs")
     seed_everything(opt.seed)
@@ -519,6 +541,7 @@ if __name__ == "__main__":
         trainer_config = lightning_config.get("trainer", OmegaConf.create())
         # default to ddp
         trainer_config["accelerator"] = "ddp"
+        trainer_config["max_epochs"] = opt.max_epochs
         for k in nondefault_trainer_args(opt):
             trainer_config[k] = getattr(opt, k)
         if not "gpus" in trainer_config:
@@ -683,7 +706,7 @@ if __name__ == "__main__":
         print(f"accumulate_grad_batches = {accumulate_grad_batches}")
         lightning_config.trainer.accumulate_grad_batches = accumulate_grad_batches
         if opt.scale_lr:
-            model.learning_rate = accumulate_grad_batches * ngpu * bs * base_lr
+            model.learning_rate = bs * base_lr
             print(
                 "Setting learning rate to {:.2e} = {} (accumulate_grad_batches) * {} (num_gpus) * {} (batchsize) * {:.2e} (base_lr)".format(
                     model.learning_rate, accumulate_grad_batches, ngpu, bs, base_lr))

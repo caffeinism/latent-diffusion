@@ -333,13 +333,16 @@ class AutoencoderKL(pl.LightningModule):
         return dec
 
     def forward(self, input, sample_posterior=True):
-        posterior = self.encode(input)
-        if sample_posterior:
-            z = posterior.sample()
+        if self.encoder.stage == self.encoder.num_resolutions:
+            posterior = self.encode(input)
+            if sample_posterior:
+                z = posterior.sample()
+            else:
+                z = posterior.mode()
+            dec = self.decode(z)
+            return dec, posterior
         else:
-            z = posterior.mode()
-        dec = self.decode(z)
-        return dec, posterior
+            return self.decoder(self.encoder(input)), None
 
     def get_input(self, batch, k):
         x = batch[k]
@@ -385,13 +388,20 @@ class AutoencoderKL(pl.LightningModule):
 
     def configure_optimizers(self):
         lr = self.learning_rate
-        opt_ae = torch.optim.Adam(list(self.encoder.parameters())+
-                                  list(self.decoder.parameters())+
-                                  list(self.quant_conv.parameters())+
-                                  list(self.post_quant_conv.parameters()),
-                                  lr=lr, betas=(0.5, 0.9))
+        opt_ae = torch.optim.Adam(
+            filter(
+                lambda p: p.requires_grad, 
+                    list(self.encoder.parameters())+
+                    list(self.decoder.parameters())+
+                    list(self.quant_conv.parameters())+
+                    list(self.post_quant_conv.parameters())
+            ),
+            lr=lr,
+            betas=(0.5, 0.9)
+        )
         opt_disc = torch.optim.Adam(self.loss.discriminator.parameters(),
                                     lr=lr, betas=(0.5, 0.9))
+        self.decoder.enable_last_layer()
         return [opt_ae, opt_disc], []
 
     def get_last_layer(self):
@@ -409,7 +419,8 @@ class AutoencoderKL(pl.LightningModule):
                 assert xrec.shape[1] > 3
                 x = self.to_rgb(x)
                 xrec = self.to_rgb(xrec)
-            log["samples"] = self.decode(torch.randn_like(posterior.sample()))
+            if posterior is not None:
+                log["samples"] = self.decode(torch.randn_like(posterior.sample()))
             log["reconstructions"] = xrec
         log["inputs"] = x
         return log
@@ -421,7 +432,7 @@ class AutoencoderKL(pl.LightningModule):
         x = F.conv2d(x, weight=self.colorize)
         x = 2.*(x-x.min())/(x.max()-x.min()) - 1.
         return x
-
+        
 
 class IdentityFirstStage(torch.nn.Module):
     def __init__(self, *args, vq_interface=False, **kwargs):
